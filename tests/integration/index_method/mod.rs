@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use core_tester::common::rng_from_time_or_env;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 use turso_core::index_method::fts::FtsIndexMethod;
 use turso_core::{
     index_method::{
@@ -384,7 +384,7 @@ fn test_vector_sparse_ivf_fuzz(tmp_db: TempDatabase) {
     }
 }
 
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test(init_sql = "CREATE TABLE docs(id INTEGER PRIMARY KEY, title TEXT, body TEXT)")]
 fn test_fts_create_destroy(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -459,7 +459,7 @@ fn test_fts_create_destroy(tmp_db: TempDatabase) {
     assert!(!tables_after.iter().any(|t| t.contains("fts_dir")));
 }
 
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test(init_sql = "CREATE TABLE docs(id INTEGER PRIMARY KEY, title TEXT, body TEXT)")]
 fn test_fts_insert_query(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -590,7 +590,7 @@ fn test_fts_insert_query(tmp_db: TempDatabase) {
     }
 }
 
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_sql_queries(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -647,7 +647,7 @@ fn test_fts_sql_queries(tmp_db: TempDatabase) {
     assert!(ids.contains(&4));
 }
 
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_order_by_and_limit(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -709,7 +709,7 @@ fn test_fts_order_by_and_limit(tmp_db: TempDatabase) {
     }
 }
 
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_limit_zero_and_negative(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -748,7 +748,7 @@ fn test_fts_limit_zero_and_negative(tmp_db: TempDatabase) {
 
 /// Test FTS function recognition mode - queries that don't match predefined patterns
 /// but are optimized via fts_match/fts_score function detection.
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_function_recognition(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -846,7 +846,7 @@ fn test_fts_function_recognition(tmp_db: TempDatabase) {
 
 /// Test query patterns that wouldn't work with pattern-based matching
 /// but should work with function recognition.
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_flexible_query_patterns(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -997,7 +997,7 @@ fn test_fts_flexible_query_patterns(tmp_db: TempDatabase) {
 }
 
 /// Test FTS with different tokenizer configurations via WITH clause
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_tokenizer_configuration(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1075,7 +1075,7 @@ fn test_fts_tokenizer_configuration(tmp_db: TempDatabase) {
 }
 
 /// Test that invalid tokenizer names are rejected
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_invalid_tokenizer_rejected(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1092,7 +1092,7 @@ fn test_fts_invalid_tokenizer_rejected(tmp_db: TempDatabase) {
 }
 
 /// Test FTS with ngram tokenizer for substring matching
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_ngram_tokenizer(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1131,7 +1131,7 @@ fn test_fts_ngram_tokenizer(tmp_db: TempDatabase) {
 
 /// Test fts_highlight function for text highlighting
 /// Signature: fts_highlight(text1, text2, ..., before_tag, after_tag, query)
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_highlight_basic(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1217,7 +1217,7 @@ fn test_fts_highlight_basic(tmp_db: TempDatabase) {
 }
 
 /// Test fts_highlight with FTS index queries
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_highlight_with_fts_query(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1262,7 +1262,7 @@ fn test_fts_highlight_with_fts_query(tmp_db: TempDatabase) {
 }
 
 /// Test fts_highlight with NULL values
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_highlight_null_handling(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1299,7 +1299,7 @@ fn test_fts_highlight_null_handling(tmp_db: TempDatabase) {
 }
 
 /// Test field weights configuration for FTS indexes
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_field_weights(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1356,7 +1356,7 @@ fn test_fts_field_weights(tmp_db: TempDatabase) {
 }
 
 /// Test that invalid weight configurations are rejected
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_invalid_weights_rejected(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1390,7 +1390,7 @@ fn test_fts_invalid_weights_rejected(tmp_db: TempDatabase) {
 /// Regression test: Query -> Insert -> Query should not panic with "dirty pages must be empty"
 /// This tests that FTS cursor caching doesn't share pending_writes between cursors,
 /// which would cause writes from one cursor to affect the Drop behavior of another.
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test(
     init_sql = "CREATE TABLE articles(id INTEGER PRIMARY KEY, title TEXT, body TEXT)"
 )]
@@ -1455,7 +1455,7 @@ fn test_fts_query_insert_query_no_panic(tmp_db: TempDatabase) {
 /// 6. Query again
 /// 7. Large update
 /// 8. Query again
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test(
     init_sql = "CREATE TABLE docs(id INTEGER PRIMARY KEY, category TEXT, title TEXT, body TEXT)"
 )]
@@ -1656,7 +1656,7 @@ fn test_fts_comprehensive_lifecycle(tmp_db: TempDatabase) {
 }
 
 /// Test FTS behavior with explicit transactions
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test(
     init_sql = "CREATE TABLE articles(id INTEGER PRIMARY KEY, title TEXT, content TEXT)"
 )]
@@ -1733,7 +1733,7 @@ fn test_fts_with_explicit_transactions(tmp_db: TempDatabase) {
     );
 }
 
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test(init_sql = "CREATE TABLE docs(id INTEGER PRIMARY KEY, title TEXT, body TEXT)")]
 fn test_fts_optimize_index(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1780,7 +1780,7 @@ fn test_fts_optimize_index(tmp_db: TempDatabase) {
     assert_eq!(rows.len(), 10, "Should find all documents with 'topic'");
 }
 
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test(init_sql = "CREATE TABLE articles(id INTEGER PRIMARY KEY, title TEXT)")]
 fn test_fts_optimize_all_indexes(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1823,7 +1823,7 @@ fn test_fts_optimize_all_indexes(tmp_db: TempDatabase) {
 /// Test that FTS functions work with column arguments in any order.
 /// The index is created with columns (title, body), but queries should work
 /// with fts_match(body, title, ...) as well as fts_match(title, body, ...).
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_column_order_agnostic(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -1917,7 +1917,7 @@ fn test_fts_column_order_agnostic(tmp_db: TempDatabase) {
 
 /// Test that FTS works with JOINS
 /// This tests the removal of the single-table restriction for custom index methods.
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_with_join(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -2010,7 +2010,7 @@ fn test_fts_with_join(tmp_db: TempDatabase) {
 }
 
 /// Test FTS with LEFT JOIN to ensure outer joins work correctly with FTS.
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_with_left_join(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -2082,7 +2082,7 @@ fn test_fts_with_left_join(tmp_db: TempDatabase) {
 
 /// Test that FTS participates in join order optimization.
 /// Uses EXPLAIN QUERY PLAN to verify the actual join order and that FTS is used.
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_join_order_optimization(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();
@@ -2236,7 +2236,7 @@ fn test_fts_join_order_optimization(tmp_db: TempDatabase) {
 
 /// Test FTS with multiple joins to verify cost-based optimization works
 /// with more complex join patterns.
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 #[turso_macros::test]
 fn test_fts_multi_table_join(tmp_db: TempDatabase) {
     let _ = env_logger::try_init();

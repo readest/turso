@@ -24,6 +24,7 @@ chrono = { workspace = true, default-features = false, features = ["clock"] }
 
 [features]
 browser = []
+wasm-fts = ["turso_core/wasm-fts"]
 tracing_release = ["turso_core/tracing_release"]
 [build-dependencies]
 napi-build = "2.3.1"

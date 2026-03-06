@@ -34,8 +34,12 @@ use tantivy::{
         NgramTokenizer, RawTokenizer, SimpleTokenizer, TextAnalyzer, TokenStream,
         WhitespaceTokenizer,
     },
-    DocAddress, HasLen, Index, IndexReader, IndexSettings, IndexWriter, Searcher, TantivyDocument,
+    DocAddress, HasLen, Index, IndexReader, IndexSettings, Searcher, TantivyDocument,
 };
+#[cfg(not(target_family = "wasm"))]
+use tantivy::IndexWriter;
+#[cfg(target_family = "wasm")]
+use tantivy::{IndexMeta, SegmentMeta, SingleSegmentIndexWriter};
 use turso_parser::ast::{self, Select, SortOrder};
 
 /// Name identifier for the FTS index method, used in `CREATE INDEX ... USING fts`.
@@ -62,6 +66,103 @@ pub const DEFAULT_HOT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 pub const DEFAULT_CHUNK_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
 const ROWID_FIELD: &str = "rowid";
+
+/// Wrapper around tantivy's index writer.
+///
+/// On native, uses `IndexWriter` (spawns 1 indexing thread).
+/// On WASM, uses `SingleSegmentIndexWriter` (no threads) because `pthread_create`
+/// deadlocks — the browser cannot create Web Workers from within an emnapi
+/// thread-pool worker.
+#[cfg(not(target_family = "wasm"))]
+struct FtsIndexWriter(IndexWriter);
+
+#[cfg(target_family = "wasm")]
+struct FtsIndexWriter {
+    index: Index,
+    mem_budget: usize,
+    inner: Option<SingleSegmentIndexWriter>,
+}
+
+impl FtsIndexWriter {
+    fn new(index: &Index, mem_budget: usize) -> tantivy::Result<Self> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let writer = index.writer_with_num_threads(1, mem_budget)?;
+            writer.set_merge_policy(Box::new(NoMergePolicy));
+            Ok(Self(writer))
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let inner = SingleSegmentIndexWriter::new(index.clone(), mem_budget)?;
+            Ok(Self {
+                index: index.clone(),
+                mem_budget,
+                inner: Some(inner),
+            })
+        }
+    }
+
+    fn add_document(&mut self, doc: TantivyDocument) -> tantivy::Result<()> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.0.add_document(doc)?;
+            Ok(())
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            self.inner
+                .as_mut()
+                .expect("writer finalized")
+                .add_document(doc)
+        }
+    }
+
+    fn commit(&mut self) -> tantivy::Result<()> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.0.commit()?;
+            Ok(())
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            if let Some(writer) = self.inner.take() {
+                // Save existing segments before finalize, which overwrites meta.json
+                // with only the newly written segment.
+                let prev_segments: Vec<SegmentMeta> =
+                    self.index.searchable_segment_metas().unwrap_or_default();
+
+                let index = writer.finalize()?;
+
+                // Restore previous segments alongside the new one
+                if !prev_segments.is_empty() {
+                    let mut meta = index.load_metas()?;
+                    meta.segments.extend(prev_segments);
+                    let mut buffer = serde_json::to_vec_pretty(&meta)
+                        .map_err(|e| tantivy::TantivyError::InternalError(e.to_string()))?;
+                    buffer.push(b'\n');
+                    let meta_path = std::path::Path::new("meta.json");
+                    index.directory().atomic_write(meta_path, &buffer)?;
+                }
+
+                self.index = index.clone();
+                self.inner = Some(SingleSegmentIndexWriter::new(index, self.mem_budget)?);
+            }
+            Ok(())
+        }
+    }
+
+    fn delete_term(&mut self, term: tantivy::Term) {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.0.delete_term(term);
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = term;
+            tracing::warn!("FTS delete_term is not supported on WASM");
+        }
+    }
+}
 
 // Thread-local tokenizer cache to avoid creating a new tokenizer for each call.
 // TextAnalyzer is not Send/Sync, so we use thread_local storage.
@@ -1313,6 +1414,16 @@ impl std::fmt::Debug for CachedFtsDirectory {
 }
 
 /// FTS index attachment that holds configuration and creates cursors for queries.
+/// On WASM, SingleSegmentIndexWriter doesn't support delete_term.
+/// We track deleted/updated rowids in shared state so all cursors can filter
+/// stale docs during search.
+#[cfg(target_family = "wasm")]
+#[derive(Debug, Default)]
+pub struct WasmFtsState {
+    /// Rowids that were deleted and not re-inserted.
+    deleted_rowids: HashSet<i64>,
+}
+
 ///
 /// Created by `FtsIndexMethod::attach()` and implements `IndexMethodAttachment`.
 /// Stores the Tantivy schema, field mappings, query patterns, and a shared
@@ -1335,6 +1446,9 @@ pub struct FtsIndexAttachment {
     field_weights: HashMap<String, f32>,
     /// In-memory cached tantivy directory state
     cached_directory_state: Arc<RwLock<Option<CachedFtsDirectory>>>,
+    /// Shared WASM FTS state for tracking deletes/updates across cursors
+    #[cfg(target_family = "wasm")]
+    wasm_state: Arc<RwLock<WasmFtsState>>,
 }
 
 /// Supported tokenizer names for FTS indexes
@@ -1481,6 +1595,8 @@ impl FtsIndexAttachment {
             patterns,
             field_weights,
             cached_directory_state: Arc::new(RwLock::new(None)),
+            #[cfg(target_family = "wasm")]
+            wasm_state: Arc::new(RwLock::new(WasmFtsState::default())),
         })
     }
 }
@@ -1504,6 +1620,8 @@ impl IndexMethodAttachment for FtsIndexAttachment {
             self.text_fields.clone(),
             self.field_weights.clone(),
             self.cached_directory_state.clone(),
+            #[cfg(target_family = "wasm")]
+            self.wasm_state.clone(),
         )))
     }
 }
@@ -1781,13 +1899,16 @@ pub struct FtsCursor {
     hybrid_directory: Option<HybridBTreeDirectory>,
     index: Option<Index>,
     reader: Option<IndexReader>,
-    writer: Option<IndexWriter>,
+    writer: Option<FtsIndexWriter>,
     searcher: Option<Searcher>,
     state: FtsState,
     pending_docs_count: usize,
     current_hits: Vec<(f32, DocAddress, i64)>,
     hit_pos: usize,
     current_pattern: i64,
+    /// Shared WASM state for tracking deleted/updated rowids across cursors.
+    #[cfg(target_family = "wasm")]
+    wasm_state: Arc<RwLock<WasmFtsState>>,
 }
 
 impl FtsCursor {
@@ -1803,6 +1924,7 @@ impl FtsCursor {
         text_fields: Vec<(IndexColumn, Field)>,
         field_weights: HashMap<String, f32>,
         shared_directory_cache: Arc<RwLock<Option<CachedFtsDirectory>>>,
+        #[cfg(target_family = "wasm")] wasm_state: Arc<RwLock<WasmFtsState>>,
     ) -> Self {
         let dir_table_name = format!(
             "{}fts_dir_{}",
@@ -1837,6 +1959,8 @@ impl FtsCursor {
             current_hits: Vec::new(),
             hit_pos: 0,
             current_pattern: FTS_PATTERN_SCORE,
+            #[cfg(target_family = "wasm")]
+            wasm_state,
         }
     }
 
@@ -1911,7 +2035,16 @@ impl FtsCursor {
                 Index::create(
                     hybrid_dir.clone(),
                     self.schema.clone(),
-                    IndexSettings::default(),
+                    {
+                        let mut settings = IndexSettings::default();
+                        // On WASM, disable dedicated compression thread since
+                        // pthread_create is not available in the browser.
+                        #[cfg(target_family = "wasm")]
+                        {
+                            settings.docstore_compress_dedicated_thread = false;
+                        }
+                        settings
+                    },
                 )
                 .map_err(|e| LimboError::InternalError(e.to_string()))?
             };
@@ -2947,12 +3080,8 @@ impl IndexMethodCursor for FtsCursor {
 
         // Now create writer
         if let Some(ref index) = self.index {
-            // Use single-threaded mode to avoid concurrent access
-            let writer = index
-                .writer_with_num_threads(1, DEFAULT_MEMORY_BUDGET_BYTES)
+            let writer = FtsIndexWriter::new(index, DEFAULT_MEMORY_BUDGET_BYTES)
                 .map_err(|e| LimboError::InternalError(e.to_string()))?;
-            // Disable background merges
-            writer.set_merge_policy(Box::new(NoMergePolicy));
             self.writer = Some(writer);
         }
         Ok(IOResult::Done(()))
@@ -3010,6 +3139,11 @@ impl IndexMethodCursor for FtsCursor {
             }
         };
 
+        // On WASM, if this rowid was previously deleted (e.g. during UPDATE),
+        // clear it from deleted_rowids so the new document is visible in queries.
+        #[cfg(target_family = "wasm")]
+        self.wasm_state.write().deleted_rowids.remove(&rowid);
+
         let mut doc = TantivyDocument::default();
         doc.add_i64(self.rowid_field, rowid);
 
@@ -3058,17 +3192,30 @@ impl IndexMethodCursor for FtsCursor {
             }
         };
 
-        let term = tantivy::Term::from_field_i64(self.rowid_field, rowid);
-        writer.delete_term(term);
-
-        // Track delete as a pending operation so commit_and_flush() will run
-        // and invalidate the shared directory cache
-        self.pending_docs_count += 1;
-        if self.pending_docs_count >= BATCH_COMMIT_SIZE {
-            return self.commit_and_flush();
+        // On WASM, SingleSegmentIndexWriter doesn't support delete_term and calling
+        // commit/finalize with no new docs would create an empty segment that replaces
+        // the existing index. Instead, track deleted rowids and filter during search.
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = writer;
+            self.wasm_state.write().deleted_rowids.insert(rowid);
+            return Ok(IOResult::Done(()));
         }
 
-        Ok(IOResult::Done(()))
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let term = tantivy::Term::from_field_i64(self.rowid_field, rowid);
+            writer.delete_term(term);
+
+            // Track delete as a pending operation so commit_and_flush() will run
+            // and invalidate the shared directory cache
+            self.pending_docs_count += 1;
+            if self.pending_docs_count >= BATCH_COMMIT_SIZE {
+                return self.commit_and_flush();
+            }
+
+            Ok(IOResult::Done(()))
+        }
     }
 
     /// Starts an FTS query. Parses the query string and executes the search.
@@ -3201,6 +3348,11 @@ impl IndexMethodCursor for FtsCursor {
                 let rowid = rowid_reader.first(doc_addr.doc_id).ok_or_else(|| {
                     LimboError::InternalError("FTS: rowid fast field missing value".into())
                 })?;
+                // On WASM, skip rows that were deleted but still in the index
+                #[cfg(target_family = "wasm")]
+                if self.wasm_state.read().deleted_rowids.contains(&rowid) {
+                    continue;
+                }
                 self.current_hits.push((score, doc_addr, rowid));
             }
         }
@@ -3323,53 +3475,70 @@ impl IndexMethodCursor for FtsCursor {
             .index
             .as_ref()
             .ok_or_else(|| LimboError::InternalError("FTS index not initialized".to_string()))?;
-        let writer = self
-            .writer
-            .as_mut()
-            .ok_or_else(|| LimboError::InternalError("FTS writer not initialized".to_string()))?;
+        // Merge requires IndexWriter which is only available on native.
+        // On WASM we use SingleSegmentIndexWriter which has no merge support.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let writer = self
+                .writer
+                .as_mut()
+                .ok_or_else(|| {
+                    LimboError::InternalError("FTS writer not initialized".to_string())
+                })?;
 
-        // Get all searchable segment IDs
-        let segment_ids = index
-            .searchable_segment_ids()
-            .map_err(|e| LimboError::InternalError(format!("FTS optimize: {e}")))?;
+            // Get all searchable segment IDs
+            let segment_ids = index
+                .searchable_segment_ids()
+                .map_err(|e| LimboError::InternalError(format!("FTS optimize: {e}")))?;
 
-        if segment_ids.len() <= 1 {
+            if segment_ids.len() <= 1 {
+                tracing::debug!(
+                    "FTS optimize: nothing to merge ({} segments)",
+                    segment_ids.len()
+                );
+                return Ok(IOResult::Done(()));
+            }
+
             tracing::debug!(
-                "FTS optimize: nothing to merge ({} segments)",
+                "FTS optimize: merging {} segments into one",
                 segment_ids.len()
             );
-            return Ok(IOResult::Done(()));
+            // Schedule the merge operation
+            let merge_future = writer.0.merge(&segment_ids);
+            // Wait for merge to complete (blocking)
+            match merge_future.wait() {
+                Ok(Some(segment_meta)) => {
+                    tracing::debug!(
+                        "FTS optimize: merge completed, new segment has {} docs",
+                        segment_meta.num_docs()
+                    );
+                }
+                Ok(None) => {
+                    tracing::debug!("FTS optimize: merge was cancelled or no merge needed");
+                }
+                Err(e) => {
+                    return Err(LimboError::InternalError(format!(
+                        "FTS optimize merge failed: {e}",
+                    )));
+                }
+            }
+
+            // Commit merge and invalidate shared directory cache
+            writer.commit().map_err(|e| {
+                LimboError::InternalError(format!("FTS optimize commit failed: {e}"))
+            })?;
+            {
+                let mut cache = self.shared_directory_cache.write();
+                *cache = None;
+            }
         }
 
-        tracing::debug!(
-            "FTS optimize: merging {} segments into one",
-            segment_ids.len()
-        );
-        // Schedule the merge operation
-        let merge_future = writer.merge(&segment_ids);
-        // Wait for merge to complete (blocking)
-        match merge_future.wait() {
-            Ok(Some(segment_meta)) => {
-                tracing::debug!(
-                    "FTS optimize: merge completed, new segment has {} docs",
-                    segment_meta.num_docs()
-                );
-            }
-            Ok(None) => {
-                // Merge was cancelled or no merge was needed
-                tracing::debug!("FTS optimize: merge was cancelled or no merge needed");
-            }
-            Err(e) => {
-                return Err(LimboError::InternalError(format!(
-                    "FTS optimize merge failed: {e}",
-                )));
-            }
+        #[cfg(target_family = "wasm")]
+        {
+            tracing::debug!("FTS optimize: merge not supported on WASM, skipping");
+            let _ = index;
         }
 
-        // Commit merge and invalidate shared directory cache since we changed the structure
-        writer
-            .commit()
-            .map_err(|e| LimboError::InternalError(format!("FTS optimize commit failed: {e}")))?;
         {
             let mut cache = self.shared_directory_cache.write();
             *cache = None;

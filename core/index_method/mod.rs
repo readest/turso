@@ -12,7 +12,7 @@ use crate::{
 };
 
 pub mod backing_btree;
-#[cfg(all(feature = "fts", not(target_family = "wasm")))]
+#[cfg(fts_enabled)]
 pub mod fts;
 pub mod toy_vector_sparse_ivf;
 

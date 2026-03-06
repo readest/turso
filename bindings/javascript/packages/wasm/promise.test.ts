@@ -291,6 +291,102 @@ test('sorter-wasm', async () => {
     await db.close();
 })
 
+test('fts-base', async (ctx) => {
+    const db = await connect(":memory:", { experimental: ["index_method"] });
+    await db.exec(`
+        CREATE TABLE documents (id INTEGER PRIMARY KEY, title TEXT, body TEXT);
+        INSERT INTO documents VALUES (1, 'Introduction to Rust', 'Rust is a systems programming language focused on safety and performance');
+        INSERT INTO documents VALUES (2, 'JavaScript Guide', 'JavaScript is a dynamic programming language used for web development');
+        INSERT INTO documents VALUES (3, 'Database Internals', 'Understanding how databases store and retrieve data efficiently');
+    `);
+    try {
+        await db.exec(`CREATE INDEX documents_fts ON documents USING fts (title, body)`);
+    } catch {
+        await db.close();
+        ctx.skip();
+        return;
+    }
+
+    // fts_match search
+    const matchResults = await db.prepare(
+        "SELECT id, title, fts_score(title, body, 'programming language') as score FROM documents WHERE fts_match(title, body, 'programming language')"
+    ).all();
+    expect(matchResults.length).toBe(2);
+    expect(matchResults.map(r => r.id).sort()).toEqual([1, 2]);
+    for (const row of matchResults) {
+        expect(row.score).toBeGreaterThan(0);
+    }
+
+    // fts_highlight
+    const highlightResults = await db.prepare(
+        "SELECT id, fts_highlight(title, '<b>', '</b>', 'Rust') as highlighted FROM documents WHERE fts_match(title, body, 'Rust')"
+    ).all();
+    expect(highlightResults.length).toBe(1);
+    expect(highlightResults[0].id).toBe(1);
+    expect(highlightResults[0].highlighted).toContain('<b>');
+    expect(highlightResults[0].highlighted).toContain('Rust');
+
+    // no match
+    const noResults = await db.prepare(
+        "SELECT * FROM documents WHERE fts_match(title, body, 'nonexistentterm')"
+    ).all();
+    expect(noResults.length).toBe(0);
+    await db.close();
+})
+
+test('fts-delete', async (ctx) => {
+    const db = await connect(":memory:", { experimental: ["index_method"] });
+    await db.exec('CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)');
+    try {
+        await db.exec('CREATE INDEX idx_notes_fts ON notes USING fts (text)');
+    } catch {
+        await db.close();
+        ctx.skip();
+        return;
+    }
+    await db.exec("INSERT INTO notes (text) VALUES ('important meeting notes')");
+    await db.exec("INSERT INTO notes (text) VALUES ('grocery list items')");
+
+    await db.exec('DELETE FROM notes WHERE id = 2');
+
+    const rows = await db.prepare(
+        "SELECT text FROM notes WHERE fts_match(text, 'meeting')"
+    ).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].text).toContain('meeting');
+
+    const all = await db.prepare('SELECT * FROM notes').all();
+    expect(all).toHaveLength(1);
+    await db.close();
+})
+
+test('fts-insert', async (ctx) => {
+    const db = await connect(":memory:", { experimental: ["index_method"] });
+    await db.exec('CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)');
+    try {
+        await db.exec('CREATE INDEX idx_notes_fts ON notes USING fts (text)');
+    } catch {
+        await db.close();
+        ctx.skip();
+        return;
+    }
+
+    await db.exec("INSERT INTO notes (text) VALUES ('first note about testing')");
+
+    let rows = await db.prepare(
+        "SELECT id FROM notes WHERE fts_match(text, 'testing')"
+    ).all();
+    expect(rows).toHaveLength(1);
+
+    await db.exec("INSERT INTO notes (text) VALUES ('second note about testing strategies')");
+
+    rows = await db.prepare(
+        "SELECT id FROM notes WHERE fts_match(text, 'testing')"
+    ).all();
+    expect(rows).toHaveLength(2);
+    await db.close();
+})
+
 test('hash-join-wasm', { timeout: 60_000 }, async () => {
     const db = await connect(':memory:');
     await db.exec('CREATE TABLE a (k, v)');

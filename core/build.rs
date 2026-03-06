@@ -7,6 +7,9 @@ fn main() {
     cfg_aliases! {
         injected_yields: { any(feature = "test_helper", feature = "simulator") },
         host_shared_wal: { all(any(unix, target_os = "windows"), target_pointer_width = "64") },
+        // FTS is compiled in when the `fts` feature is enabled, except on WASM
+        // targets which additionally require the `wasm-fts` opt-in.
+        fts_enabled: { all(feature = "fts", any(not(target_family = "wasm"), feature = "wasm-fts")) },
     }
 
     // Ensure Cargo reruns when this script or the reproducibility seed changes.
