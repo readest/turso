@@ -308,9 +308,9 @@ test('fts-base', async (ctx) => {
     }
 
     // fts_match search
-    const matchResults = await db.prepare(
+    const matchResults = await (await db.prepare(
         "SELECT id, title, fts_score(title, body, 'programming language') as score FROM documents WHERE fts_match(title, body, 'programming language')"
-    ).all();
+    )).all();
     expect(matchResults.length).toBe(2);
     expect(matchResults.map(r => r.id).sort()).toEqual([1, 2]);
     for (const row of matchResults) {
@@ -318,18 +318,18 @@ test('fts-base', async (ctx) => {
     }
 
     // fts_highlight
-    const highlightResults = await db.prepare(
+    const highlightResults = await (await db.prepare(
         "SELECT id, fts_highlight(title, '<b>', '</b>', 'Rust') as highlighted FROM documents WHERE fts_match(title, body, 'Rust')"
-    ).all();
+    )).all();
     expect(highlightResults.length).toBe(1);
     expect(highlightResults[0].id).toBe(1);
     expect(highlightResults[0].highlighted).toContain('<b>');
     expect(highlightResults[0].highlighted).toContain('Rust');
 
     // no match
-    const noResults = await db.prepare(
+    const noResults = await (await db.prepare(
         "SELECT * FROM documents WHERE fts_match(title, body, 'nonexistentterm')"
-    ).all();
+    )).all();
     expect(noResults.length).toBe(0);
     await db.close();
 })
@@ -349,13 +349,13 @@ test('fts-delete', async (ctx) => {
 
     await db.exec('DELETE FROM notes WHERE id = 2');
 
-    const rows = await db.prepare(
+    const rows = await (await db.prepare(
         "SELECT text FROM notes WHERE fts_match(text, 'meeting')"
-    ).all();
+    )).all();
     expect(rows).toHaveLength(1);
     expect(rows[0].text).toContain('meeting');
 
-    const all = await db.prepare('SELECT * FROM notes').all();
+    const all = await (await db.prepare('SELECT * FROM notes')).all();
     expect(all).toHaveLength(1);
     await db.close();
 })
@@ -373,16 +373,16 @@ test('fts-insert', async (ctx) => {
 
     await db.exec("INSERT INTO notes (text) VALUES ('first note about testing')");
 
-    let rows = await db.prepare(
+    let rows = await (await db.prepare(
         "SELECT id FROM notes WHERE fts_match(text, 'testing')"
-    ).all();
+    )).all();
     expect(rows).toHaveLength(1);
 
     await db.exec("INSERT INTO notes (text) VALUES ('second note about testing strategies')");
 
-    rows = await db.prepare(
+    rows = await (await db.prepare(
         "SELECT id FROM notes WHERE fts_match(text, 'testing')"
-    ).all();
+    )).all();
     expect(rows).toHaveLength(2);
     await db.close();
 })

@@ -207,3 +207,5 @@ bundle
 *.db-info
 
 __screenshots__
+
+packages/wasm/worker-source.ts
